@@ -1,132 +1,125 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 import pandas as pd
 from io import BytesIO
 import json
-from scipy import ndimage
-from skimage import measure, morphology, filters
-from skimage.segmentation import clear_border
 
 # Configure page
 st.set_page_config(
-    page_title="Flowchart to Editable Format",
+    page_title="Flowchart Shape Detector",
     page_icon="📊",
     layout="wide"
 )
 
-# Shape detection without OCR
-@st.cache_data
-def get_app_info():
-    return {"version": "1.0", "ocr_enabled": False}
-
 def preprocess_image(image):
-    """Basic image preprocessing using PIL and skimage"""
-    # Convert PIL to grayscale
+    """Basic image preprocessing using only PIL"""
+    # Convert to grayscale
     if image.mode != 'L':
         gray = image.convert('L')
     else:
         gray = image
     
-    # Convert to numpy array
+    # Apply blur to reduce noise
+    blurred = gray.filter(ImageFilter.GaussianBlur(radius=1))
+    
+    # Convert to numpy for easier processing
     gray_array = np.array(gray)
+    blurred_array = np.array(blurred)
     
-    # Apply Gaussian blur using scipy
-    blurred = ndimage.gaussian_filter(gray_array, sigma=1.0)
-    
-    # Apply threshold using skimage
-    thresh_val = filters.threshold_otsu(blurred)
-    thresh = blurred > thresh_val
+    # Simple threshold
+    threshold = 128
+    thresh = blurred_array < threshold
     thresh = thresh.astype(np.uint8) * 255
     
     return thresh, gray_array
 
-def detect_shapes(image):
-    """Detect basic shapes using skimage"""
+def simple_shape_detection(binary_image):
+    """Very basic shape detection using simple algorithms"""
     shapes_detected = []
     
-    # Convert to binary
-    binary = image < 128  # Invert for skimage
+    # Convert to boolean for easier processing
+    binary = binary_image > 128
+    height, width = binary.shape
     
-    # Remove noise
-    cleaned = morphology.remove_small_objects(binary, min_size=500)
-    cleaned = clear_border(cleaned)
+    # Simple connected components (very basic implementation)
+    visited = np.zeros_like(binary, dtype=bool)
+    shape_id = 0
     
-    # Label connected components
-    labeled = measure.label(cleaned)
-    regions = measure.regionprops(labeled)
+    def flood_fill(start_y, start_x):
+        """Simple flood fill to find connected components"""
+        if (start_y < 0 or start_y >= height or 
+            start_x < 0 or start_x >= width or 
+            visited[start_y, start_x] or 
+            not binary[start_y, start_x]):
+            return []
+        
+        points = []
+        stack = [(start_y, start_x)]
+        
+        while stack:
+            y, x = stack.pop()
+            if (y < 0 or y >= height or 
+                x < 0 or x >= width or 
+                visited[y, x] or 
+                not binary[y, x]):
+                continue
+                
+            visited[y, x] = True
+            points.append((y, x))
+            
+            # Add 4-connected neighbors
+            stack.extend([(y+1, x), (y-1, x), (y, x+1), (y, x-1)])
+        
+        return points
     
-    for i, region in enumerate(regions):
-        # Filter small areas
-        if region.area < 500:
-            continue
-        
-        # Get bounding box
-        minr, minc, maxr, maxc = region.bbox
-        y, x, h, w = minr, minc, maxr - minr, maxc - minc
-        
-        # Get shape characteristics
-        perimeter = region.perimeter
-        area = region.area
-        
-        # Calculate shape metrics
-        if perimeter > 0:
-            circularity = 4 * np.pi * area / (perimeter * perimeter)
-            aspect_ratio = region.major_axis_length / region.minor_axis_length if region.minor_axis_length > 0 else 1
-        else:
-            circularity = 0
-            aspect_ratio = 1
-        
-        # Classify shape
-        shape_type = "Unknown"
-        
-        if circularity > 0.7:
-            shape_type = "Circle"
-        elif aspect_ratio < 1.2:
-            shape_type = "Square"
-        elif aspect_ratio < 3.0:
-            shape_type = "Rectangle"
-        else:
-            shape_type = "Elongated Shape"
-        
-        # Calculate vertices (approximation)
-        vertices = 4  # Default for most flowchart shapes
-        if circularity > 0.7:
-            vertices = 0  # Circle
-        
-        shapes_detected.append({
-            'id': i,
-            'type': shape_type,
-            'vertices': vertices,
-            'area': int(area),
-            'x': int(x),
-            'y': int(y),
-            'width': int(w),
-            'height': int(h),
-            'center_x': int(x + w/2),
-            'center_y': int(y + h/2),
-            'circularity': round(circularity, 2),
-            'aspect_ratio': round(aspect_ratio, 2)
-        })
+    # Find connected components
+    for y in range(height):
+        for x in range(width):
+            if binary[y, x] and not visited[y, x]:
+                points = flood_fill(y, x)
+                
+                if len(points) > 100:  # Minimum size filter
+                    # Calculate bounding box
+                    ys, xs = zip(*points)
+                    min_y, max_y = min(ys), max(ys)
+                    min_x, max_x = min(xs), max(xs)
+                    
+                    w = max_x - min_x + 1
+                    h = max_y - min_y + 1
+                    area = len(points)
+                    
+                    # Simple shape classification based on dimensions
+                    aspect_ratio = w / h if h > 0 else 1
+                    fill_ratio = area / (w * h) if (w * h) > 0 else 0
+                    
+                    if fill_ratio > 0.7 and 0.8 <= aspect_ratio <= 1.2:
+                        shape_type = "Square/Circle"
+                    elif aspect_ratio < 0.6 or aspect_ratio > 1.8:
+                        shape_type = "Rectangle"
+                    else:
+                        shape_type = "Rectangle"
+                    
+                    shapes_detected.append({
+                        'id': shape_id,
+                        'type': shape_type,
+                        'area': area,
+                        'x': min_x,
+                        'y': min_y,
+                        'width': w,
+                        'height': h,
+                        'center_x': min_x + w // 2,
+                        'center_y': min_y + h // 2,
+                        'aspect_ratio': round(aspect_ratio, 2),
+                        'fill_ratio': round(fill_ratio, 2)
+                    })
+                    
+                    shape_id += 1
     
     return shapes_detected
 
-def detect_text_in_shapes(image_gray, shapes):
-    """Placeholder for text detection - returns empty text for all shapes"""
-    text_results = []
-    
-    for shape in shapes:
-        text_results.append({
-            'shape_id': shape['id'],
-            'text': "Text detection disabled",
-            'confidence': 0.0
-        })
-    
-    return text_results
-
-def draw_detection_results(original_image, shapes, texts):
-    """Draw bounding boxes and text on the image using PIL"""
-    # Convert numpy array to PIL Image if needed
+def draw_detection_results(original_image, shapes):
+    """Draw bounding boxes on the image using PIL"""
     if isinstance(original_image, np.ndarray):
         if len(original_image.shape) == 3:
             result_image = Image.fromarray(original_image, 'RGB')
@@ -137,66 +130,50 @@ def draw_detection_results(original_image, shapes, texts):
     
     draw = ImageDraw.Draw(result_image)
     
-    # Create text lookup
-    text_lookup = {text['shape_id']: text for text in texts}
+    colors = ['green', 'red', 'blue', 'orange', 'purple', 'brown']
     
-    for shape in shapes:
+    for i, shape in enumerate(shapes):
         x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
+        color = colors[i % len(colors)]
         
         # Draw bounding rectangle
-        draw.rectangle([x, y, x + w, y + h], outline='green', width=2)
+        draw.rectangle([x, y, x + w, y + h], outline=color, width=2)
         
-        # Add shape type label
+        # Add shape label
         label = f"{shape['type']} (ID: {shape['id']})"
-        draw.text((x, y - 15), label, fill='green')
+        draw.text((x, max(0, y - 15)), label, fill=color)
         
-        # Add detected text if any
-        if shape['id'] in text_lookup and text_lookup[shape['id']]['text']:
-            text = text_lookup[shape['id']]['text']
-            if len(text) > 20:
-                text = text[:20] + "..."
-            draw.text((x, y + h + 5), f"Text: {text}", fill='red')
+        # Add area info
+        draw.text((x, y + h + 2), f"Area: {shape['area']}", fill=color)
     
     return result_image
 
-def export_to_json(shapes, texts):
+def export_to_json(shapes):
     """Export results to JSON format"""
-    # Merge shapes and texts
-    text_lookup = {text['shape_id']: text for text in texts}
-    
     export_data = {
-        'flowchart_elements': []
+        'flowchart_elements': shapes,
+        'metadata': {
+            'total_shapes': len(shapes),
+            'detection_method': 'simple_flood_fill'
+        }
     }
-    
-    for shape in shapes:
-        element = shape.copy()
-        if shape['id'] in text_lookup:
-            element['text'] = text_lookup[shape['id']]['text']
-            element['text_confidence'] = text_lookup[shape['id']]['confidence']
-        else:
-            element['text'] = ""
-            element['text_confidence'] = 0
-            
-        export_data['flowchart_elements'].append(element)
-    
     return json.dumps(export_data, indent=2)
 
 # Main app
 def main():
-    st.title("📊 Flowchart Shape Detector")
-    st.markdown("Upload a flowchart image and detect shapes for further editing")
-    st.info("💡 **Note:** Text extraction is currently disabled. This version focuses on shape detection only.")
+    st.title("📊 Simple Flowchart Shape Detector")
+    st.markdown("Upload a flowchart image and detect basic shapes")
+    st.info("💡 **Ultra-minimal version** - Basic shape detection using simple algorithms")
     
     # Sidebar for settings
     st.sidebar.header("Settings")
-    min_area = st.sidebar.slider("Minimum Shape Area", 100, 2000, 500)
-    confidence_threshold = st.sidebar.slider("Text Confidence Threshold", 0.1, 1.0, 0.3)
+    min_area = st.sidebar.slider("Minimum Shape Area (pixels)", 100, 5000, 500)
     
     # File uploader
     uploaded_file = st.file_uploader(
         "Choose an image file", 
         type=['jpg', 'jpeg', 'png', 'bmp'],
-        help="Upload a clear image of your flowchart"
+        help="Upload a clear, high-contrast image of your flowchart"
     )
     
     if uploaded_file is not None:
@@ -209,47 +186,39 @@ def main():
             st.subheader("Original Image")
             st.image(image, use_container_width=True)
         
-        with st.spinner("Processing image..."):
+        with st.spinner("Detecting shapes..."):
             # Preprocess image
             processed_img, gray_img = preprocess_image(image)
             
             # Detect shapes
-            shapes = detect_shapes(processed_img)
+            shapes = simple_shape_detection(processed_img)
             
             # Filter by minimum area
             shapes = [s for s in shapes if s['area'] >= min_area]
-            
-            # Extract text (disabled for now)
-            if shapes:
-                texts = detect_text_in_shapes(gray_img, shapes)
-            else:
-                texts = []
         
         with col2:
             st.subheader("Detection Results")
             if shapes:
-                result_img = draw_detection_results(image, shapes, texts)
+                result_img = draw_detection_results(image, shapes)
                 st.image(result_img, use_container_width=True)
             else:
-                st.warning("No shapes detected. Try adjusting the minimum area threshold.")
+                st.warning("No shapes detected. Try adjusting the minimum area or use a higher contrast image.")
         
         # Display results
         if shapes:
-            st.subheader("Detected Elements")
+            st.subheader("Detected Shapes")
             
-            # Create DataFrame for better display
+            # Create DataFrame for display
             display_data = []
-            text_lookup = {text['shape_id']: text for text in texts}
-            
             for shape in shapes:
                 row = {
                     'ID': shape['id'],
                     'Type': shape['type'],
                     'Position': f"({shape['x']}, {shape['y']})",
-                    'Size': f"{shape['width']} x {shape['height']}",
+                    'Size': f"{shape['width']} × {shape['height']}",
                     'Area': shape['area'],
-                    'Text': text_lookup.get(shape['id'], {}).get('text', 'No text detected'),
-                    'Confidence': text_lookup.get(shape['id'], {}).get('confidence', 0)
+                    'Aspect Ratio': shape['aspect_ratio'],
+                    'Fill Ratio': shape['fill_ratio']
                 }
                 display_data.append(row)
             
@@ -262,11 +231,11 @@ def main():
             
             with col1:
                 # JSON export
-                json_data = export_to_json(shapes, texts)
+                json_data = export_to_json(shapes)
                 st.download_button(
                     label="📄 Download JSON",
                     data=json_data,
-                    file_name="flowchart_data.json",
+                    file_name="flowchart_shapes.json",
                     mime="application/json"
                 )
             
@@ -276,7 +245,7 @@ def main():
                 st.download_button(
                     label="📊 Download CSV",
                     data=csv_data,
-                    file_name="flowchart_elements.csv",
+                    file_name="flowchart_shapes.csv",
                     mime="text/csv"
                 )
             
@@ -288,39 +257,45 @@ def main():
                 st.metric("Total Shapes", len(shapes))
             
             with col2:
-                shapes_with_text = sum(1 for text in texts if text['text'])
-                st.metric("Shapes with Text", shapes_with_text)
-            
-            with col3:
-                if texts and any(text['confidence'] > 0 for text in texts):
-                    avg_confidence = np.mean([text['confidence'] for text in texts if text['confidence'] > 0])
-                    st.metric("Avg Text Confidence", f"{avg_confidence:.2f}")
-                else:
-                    st.metric("Avg Text Confidence", "0.00")
-            
-            with col4:
                 shape_types = len(set(shape['type'] for shape in shapes))
                 st.metric("Shape Types", shape_types)
+            
+            with col3:
+                avg_area = int(np.mean([shape['area'] for shape in shapes]))
+                st.metric("Avg Area", f"{avg_area} px")
+            
+            with col4:
+                total_area = sum(shape['area'] for shape in shapes)
+                st.metric("Total Area", f"{total_area} px")
         
         else:
-            st.info("No shapes detected in the image. Try uploading a clearer image or adjusting the settings.")
+            st.info("No shapes detected in the image.")
+            st.markdown("""
+            **Tips for better detection:**
+            - Use high-contrast images (black shapes on white background)
+            - Ensure shapes are clearly separated
+            - Avoid very small shapes
+            - Try adjusting the minimum area setting
+            """)
     
     else:
         st.info("👆 Please upload an image file to get started")
         
-        # Sample instructions
+        # Instructions
         st.subheader("How to use:")
         st.markdown("""
-        1. **Upload** a clear image of your flowchart
-        2. **Adjust** settings in the sidebar if needed
-        3. **View** detected shapes and text
+        1. **Upload** a clear, high-contrast flowchart image
+        2. **Adjust** the minimum area threshold if needed
+        3. **View** detected shapes with bounding boxes
         4. **Download** results in JSON or CSV format
         
-        **Tips for better results:**
-        - Use high-contrast images
-        - Ensure text is clearly readable
-        - Avoid overlapping shapes
-        - Use good lighting when taking photos
+        **Current capabilities:**
+        - Basic shape detection using flood-fill algorithm
+        - Bounding box calculation
+        - Simple shape classification
+        - Export functionality
+        
+        **Note:** This is a minimal version focusing on core functionality only.
         """)
 
 if __name__ == "__main__":
