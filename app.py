@@ -1,7 +1,6 @@
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
-import pytesseract
 import pandas as pd
 from io import BytesIO
 import json
@@ -16,10 +15,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize OCR reader
-@st.cache_resource
-def load_ocr_reader():
-    return "pytesseract"  # Just return a string identifier
+# Shape detection without OCR
+@st.cache_data
+def get_app_info():
+    return {"version": "1.0", "ocr_enabled": False}
 
 def preprocess_image(image):
     """Basic image preprocessing using PIL and skimage"""
@@ -112,48 +111,16 @@ def detect_shapes(image):
     
     return shapes_detected
 
-def detect_text_in_shapes(image_gray, shapes, ocr_reader):
-    """Extract text from detected shapes using Pytesseract"""
+def detect_text_in_shapes(image_gray, shapes):
+    """Placeholder for text detection - returns empty text for all shapes"""
     text_results = []
     
     for shape in shapes:
-        # Extract ROI (Region of Interest)
-        x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
-        
-        # Add padding
-        padding = 10
-        img_height, img_width = image_gray.shape
-        x_start = max(0, x - padding)
-        y_start = max(0, y - padding)
-        x_end = min(img_width, x + w + padding)
-        y_end = min(img_height, y + h + padding)
-        
-        roi = image_gray[y_start:y_end, x_start:x_end]
-        
-        if roi.size > 0:
-            try:
-                # Convert numpy array to PIL Image
-                roi_pil = Image.fromarray(roi)
-                
-                # Use Pytesseract to extract text
-                extracted_text = pytesseract.image_to_string(roi_pil, config='--psm 8')
-                extracted_text = extracted_text.strip()
-                
-                # Get confidence (Pytesseract doesn't provide easy confidence, so we estimate)
-                confidence = 0.8 if extracted_text else 0.0
-                
-                text_results.append({
-                    'shape_id': shape['id'],
-                    'text': extracted_text,
-                    'confidence': confidence
-                })
-                    
-            except Exception as e:
-                text_results.append({
-                    'shape_id': shape['id'],
-                    'text': "",
-                    'confidence': 0
-                })
+        text_results.append({
+            'shape_id': shape['id'],
+            'text': "Text detection disabled",
+            'confidence': 0.0
+        })
     
     return text_results
 
@@ -216,8 +183,9 @@ def export_to_json(shapes, texts):
 
 # Main app
 def main():
-    st.title("📊 Flowchart to Editable Format Converter")
-    st.markdown("Upload a flowchart image and extract shapes and text for further editing")
+    st.title("📊 Flowchart Shape Detector")
+    st.markdown("Upload a flowchart image and detect shapes for further editing")
+    st.info("💡 **Note:** Text extraction is currently disabled. This version focuses on shape detection only.")
     
     # Sidebar for settings
     st.sidebar.header("Settings")
@@ -242,9 +210,6 @@ def main():
             st.image(image, use_container_width=True)
         
         with st.spinner("Processing image..."):
-            # Load OCR reader
-            reader = load_ocr_reader()
-            
             # Preprocess image
             processed_img, gray_img = preprocess_image(image)
             
@@ -254,9 +219,9 @@ def main():
             # Filter by minimum area
             shapes = [s for s in shapes if s['area'] >= min_area]
             
-            # Extract text
+            # Extract text (disabled for now)
             if shapes:
-                texts = detect_text_in_shapes(gray_img, shapes, reader)
+                texts = detect_text_in_shapes(gray_img, shapes)
             else:
                 texts = []
         
