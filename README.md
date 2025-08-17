@@ -1,3 +1,58 @@
+---
+title: Diagram Digitizer
+emoji: 📊
+colorFrom: indigo
+colorTo: blue
+sdk: streamlit
+sdk_version: "1.32.0"
+app_file: app.py
+pinned: false
+---
+
+# Diagram Digitizer 📊
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://huggingface.co/spaces/your-username/diagram-digitizer)
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+An AI-powered web application that converts handwritten or image-based flowcharts into editable digital formats. Built with Streamlit and computer vision models.
+
+## 🚀 Features
+
+- **Smart Shape Detection**: Automatically identifies rectangles, circles, diamonds, and other flowchart elements
+- **OCR Text Extraction**: Reads handwritten and printed text within shapes using EasyOCR
+- **Visual Analysis**: Real-time processing with visual feedback and bounding boxes
+- **Multiple Export Formats**: Download results as JSON or CSV for further editing
+- **Interactive Interface**: User-friendly web app with adjustable detection parameters
+- **No Training Required**: Uses pre-trained models for immediate results
+
+## 🎯 Use Cases
+
+- Convert hand-drawn process flows to digital format
+- Digitize whiteboard diagrams from meetings
+- Extract flowchart data for documentation
+- Create editable versions of scanned flowcharts
+- Educational tools for diagram analysis
+
+## 🛠️ Technology Stack
+
+- **Frontend**: Streamlit
+- **Computer Vision**: OpenCV
+- **OCR**: EasyOCR
+- **Image Processing**: PIL, NumPy
+- **Data Handling**: Pandas
+
+## 🚀 Quick Start
+
+### Online Demo
+Try the app instantly on Hugging Face Spaces: [Diagram Digitizer Demo](https://huggingface.co/spaces/your-username/diagram-digitizer)
+
+### Local Installation
+
+1. **Clone the repository**
+```bash
+git clone https://github.com/your-username/diagram-digitizer.git
+cd diagram-digitizer
 # Diagram Digitizer 📊
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://huggingface.co/spaces/your-username/diagram-digitizer)
