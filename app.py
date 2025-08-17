@@ -184,7 +184,7 @@ def main():
         
         with col1:
             st.subheader("Original Image")
-            st.image(image, use_container_width=True)
+            st.image(image, width=None)
         
         with st.spinner("Detecting shapes..."):
             # Preprocess image
@@ -200,7 +200,7 @@ def main():
             st.subheader("Detection Results")
             if shapes:
                 result_img = draw_detection_results(image, shapes)
-                st.image(result_img, use_container_width=True)
+                st.image(result_img, width=None)
             else:
                 st.warning("No shapes detected. Try adjusting the minimum area or use a higher contrast image.")
         
@@ -223,7 +223,7 @@ def main():
                 display_data.append(row)
             
             df = pd.DataFrame(display_data)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df)
             
             # Export options
             st.subheader("Export Options")
