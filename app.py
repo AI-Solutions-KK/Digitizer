@@ -1,11 +1,13 @@
 import streamlit as st
-import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import easyocr
 import pandas as pd
 from io import BytesIO
 import json
+from scipy import ndimage
+from skimage import measure, morphology, filters
+from skimage.segmentation import clear_border
 
 # Configure page
 st.set_page_config(
@@ -20,62 +22,78 @@ def load_ocr_reader():
     return easyocr.Reader(['en'])
 
 def preprocess_image(image):
-    """Basic image preprocessing"""
-    # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    """Basic image preprocessing using PIL and skimage"""
+    # Convert PIL to grayscale
+    if image.mode != 'L':
+        gray = image.convert('L')
+    else:
+        gray = image
     
-    # Apply Gaussian blur to reduce noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Convert to numpy array
+    gray_array = np.array(gray)
     
-    # Apply adaptive threshold
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY, 11, 2
-    )
+    # Apply Gaussian blur using scipy
+    blurred = ndimage.gaussian_filter(gray_array, sigma=1.0)
     
-    return thresh, gray
+    # Apply threshold using skimage
+    thresh_val = filters.threshold_otsu(blurred)
+    thresh = blurred > thresh_val
+    thresh = thresh.astype(np.uint8) * 255
+    
+    return thresh, gray_array
 
 def detect_shapes(image):
-    """Detect basic shapes in the image"""
+    """Detect basic shapes using skimage"""
     shapes_detected = []
     
-    # Find contours
-    contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Convert to binary
+    binary = image < 128  # Invert for skimage
     
-    for i, contour in enumerate(contours):
-        # Filter small contours
-        area = cv2.contourArea(contour)
-        if area < 500:  # Minimum area threshold
+    # Remove noise
+    cleaned = morphology.remove_small_objects(binary, min_size=500)
+    cleaned = clear_border(cleaned)
+    
+    # Label connected components
+    labeled = measure.label(cleaned)
+    regions = measure.regionprops(labeled)
+    
+    for i, region in enumerate(regions):
+        # Filter small areas
+        if region.area < 500:
             continue
-            
-        # Get bounding rectangle
-        x, y, w, h = cv2.boundingRect(contour)
         
-        # Approximate contour to polygon
-        epsilon = 0.02 * cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, epsilon, True)
+        # Get bounding box
+        minr, minc, maxr, maxc = region.bbox
+        y, x, h, w = minr, minc, maxr - minr, maxc - minc
         
-        # Classify shape based on number of vertices
+        # Get shape characteristics
+        perimeter = region.perimeter
+        area = region.area
+        
+        # Calculate shape metrics
+        if perimeter > 0:
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            aspect_ratio = region.major_axis_length / region.minor_axis_length if region.minor_axis_length > 0 else 1
+        else:
+            circularity = 0
+            aspect_ratio = 1
+        
+        # Classify shape
         shape_type = "Unknown"
-        vertices = len(approx)
         
-        if vertices == 3:
-            shape_type = "Triangle"
-        elif vertices == 4:
-            # Check if rectangle or square
-            aspect_ratio = w / float(h)
-            if 0.95 <= aspect_ratio <= 1.05:
-                shape_type = "Square"
-            else:
-                shape_type = "Rectangle"
-        elif vertices > 4:
-            # Check if circle/ellipse
-            area_contour = cv2.contourArea(contour)
-            area_rect = w * h
-            if area_contour / area_rect > 0.7:
-                shape_type = "Circle/Ellipse"
-            else:
-                shape_type = "Polygon"
+        if circularity > 0.7:
+            shape_type = "Circle"
+        elif aspect_ratio < 1.2:
+            shape_type = "Square"
+        elif aspect_ratio < 3.0:
+            shape_type = "Rectangle"
+        else:
+            shape_type = "Elongated Shape"
+        
+        # Calculate vertices (approximation)
+        vertices = 4  # Default for most flowchart shapes
+        if circularity > 0.7:
+            vertices = 0  # Circle
         
         shapes_detected.append({
             'id': i,
@@ -87,7 +105,9 @@ def detect_shapes(image):
             'width': int(w),
             'height': int(h),
             'center_x': int(x + w/2),
-            'center_y': int(y + h/2)
+            'center_y': int(y + h/2),
+            'circularity': round(circularity, 2),
+            'aspect_ratio': round(aspect_ratio, 2)
         })
     
     return shapes_detected
@@ -102,10 +122,11 @@ def detect_text_in_shapes(image_gray, shapes, ocr_reader):
         
         # Add padding
         padding = 10
+        img_height, img_width = image_gray.shape
         x_start = max(0, x - padding)
         y_start = max(0, y - padding)
-        x_end = min(image_gray.shape[1], x + w + padding)
-        y_end = min(image_gray.shape[0], y + h + padding)
+        x_end = min(img_width, x + w + padding)
+        y_end = min(img_height, y + h + padding)
         
         roi = image_gray[y_start:y_end, x_start:x_end]
         
@@ -146,8 +167,17 @@ def detect_text_in_shapes(image_gray, shapes, ocr_reader):
     return text_results
 
 def draw_detection_results(original_image, shapes, texts):
-    """Draw bounding boxes and text on the image"""
-    result_image = original_image.copy()
+    """Draw bounding boxes and text on the image using PIL"""
+    # Convert numpy array to PIL Image if needed
+    if isinstance(original_image, np.ndarray):
+        if len(original_image.shape) == 3:
+            result_image = Image.fromarray(original_image, 'RGB')
+        else:
+            result_image = Image.fromarray(original_image, 'L').convert('RGB')
+    else:
+        result_image = original_image.convert('RGB')
+    
+    draw = ImageDraw.Draw(result_image)
     
     # Create text lookup
     text_lookup = {text['shape_id']: text for text in texts}
@@ -156,18 +186,18 @@ def draw_detection_results(original_image, shapes, texts):
         x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
         
         # Draw bounding rectangle
-        cv2.rectangle(result_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        draw.rectangle([x, y, x + w, y + h], outline='green', width=2)
         
         # Add shape type label
         label = f"{shape['type']} (ID: {shape['id']})"
-        cv2.putText(result_image, label, (x, y - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        draw.text((x, y - 15), label, fill='green')
         
         # Add detected text if any
         if shape['id'] in text_lookup and text_lookup[shape['id']]['text']:
-            text = text_lookup[shape['id']]['text'][:20] + "..." if len(text_lookup[shape['id']]['text']) > 20 else text_lookup[shape['id']]['text']
-            cv2.putText(result_image, f"Text: {text}", (x, y + h + 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+            text = text_lookup[shape['id']]['text']
+            if len(text) > 20:
+                text = text[:20] + "..."
+            draw.text((x, y + h + 5), f"Text: {text}", fill='red')
     
     return result_image
 
@@ -213,12 +243,6 @@ def main():
     if uploaded_file is not None:
         # Load and display original image
         image = Image.open(uploaded_file)
-        image_np = np.array(image)
-        
-        if len(image_np.shape) == 3:
-            image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-        else:
-            image_cv = image_np
         
         col1, col2 = st.columns(2)
         
@@ -231,7 +255,7 @@ def main():
             reader = load_ocr_reader()
             
             # Preprocess image
-            processed_img, gray_img = preprocess_image(image_cv)
+            processed_img, gray_img = preprocess_image(image)
             
             # Detect shapes
             shapes = detect_shapes(processed_img)
@@ -248,9 +272,8 @@ def main():
         with col2:
             st.subheader("Detection Results")
             if shapes:
-                result_img = draw_detection_results(image_cv, shapes, texts)
-                result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
-                st.image(result_img_rgb, use_container_width=True)
+                result_img = draw_detection_results(image, shapes, texts)
+                st.image(result_img, use_container_width=True)
             else:
                 st.warning("No shapes detected. Try adjusting the minimum area threshold.")
         
@@ -313,8 +336,11 @@ def main():
                 st.metric("Shapes with Text", shapes_with_text)
             
             with col3:
-                avg_confidence = np.mean([text['confidence'] for text in texts if text['confidence'] > 0])
-                st.metric("Avg Text Confidence", f"{avg_confidence:.2f}" if not np.isnan(avg_confidence) else "0.00")
+                if texts and any(text['confidence'] > 0 for text in texts):
+                    avg_confidence = np.mean([text['confidence'] for text in texts if text['confidence'] > 0])
+                    st.metric("Avg Text Confidence", f"{avg_confidence:.2f}")
+                else:
+                    st.metric("Avg Text Confidence", "0.00")
             
             with col4:
                 shape_types = len(set(shape['type'] for shape in shapes))
