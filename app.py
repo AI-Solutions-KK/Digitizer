@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
-import easyocr
+import pytesseract
 import pandas as pd
 from io import BytesIO
 import json
@@ -19,7 +19,7 @@ st.set_page_config(
 # Initialize OCR reader
 @st.cache_resource
 def load_ocr_reader():
-    return easyocr.Reader(['en'])
+    return "pytesseract"  # Just return a string identifier
 
 def preprocess_image(image):
     """Basic image preprocessing using PIL and skimage"""
@@ -113,7 +113,7 @@ def detect_shapes(image):
     return shapes_detected
 
 def detect_text_in_shapes(image_gray, shapes, ocr_reader):
-    """Extract text from detected shapes"""
+    """Extract text from detected shapes using Pytesseract"""
     text_results = []
     
     for shape in shapes:
@@ -132,30 +132,21 @@ def detect_text_in_shapes(image_gray, shapes, ocr_reader):
         
         if roi.size > 0:
             try:
-                # Use OCR to extract text
-                results = ocr_reader.readtext(roi)
+                # Convert numpy array to PIL Image
+                roi_pil = Image.fromarray(roi)
                 
-                extracted_text = ""
-                confidence_scores = []
+                # Use Pytesseract to extract text
+                extracted_text = pytesseract.image_to_string(roi_pil, config='--psm 8')
+                extracted_text = extracted_text.strip()
                 
-                for (bbox, text, confidence) in results:
-                    if confidence > 0.3:  # Confidence threshold
-                        extracted_text += text + " "
-                        confidence_scores.append(confidence)
+                # Get confidence (Pytesseract doesn't provide easy confidence, so we estimate)
+                confidence = 0.8 if extracted_text else 0.0
                 
-                if extracted_text.strip():
-                    avg_confidence = np.mean(confidence_scores) if confidence_scores else 0
-                    text_results.append({
-                        'shape_id': shape['id'],
-                        'text': extracted_text.strip(),
-                        'confidence': round(avg_confidence, 2)
-                    })
-                else:
-                    text_results.append({
-                        'shape_id': shape['id'],
-                        'text': "",
-                        'confidence': 0
-                    })
+                text_results.append({
+                    'shape_id': shape['id'],
+                    'text': extracted_text,
+                    'confidence': confidence
+                })
                     
             except Exception as e:
                 text_results.append({
